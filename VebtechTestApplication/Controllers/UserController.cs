@@ -1,9 +1,11 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using _VebtechApplication.Data;
+using _VebtechApplication.Models;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using VebtechTestApplication.Data;
 using VebtechTestApplication.Models;
 
-namespace VebtechTestApplication.Controllers
+namespace VebtechApplication.Controllers
 {
     [Route("api/users")]
     [ApiController]
@@ -16,34 +18,31 @@ namespace VebtechTestApplication.Controllers
             _context = context;
         }
 
-        // Получаем список пользователей для сортировки и пагинации
         [HttpGet]
-        public IActionResult GetUsers(int page = 1, int pageSize = 10, string sortField = "Id", string sortOrder = "ascending", string filter = "")
+        public async Task<IActionResult> GetUsers(int page = 1, int pageSize = 10, string sortField = "Id", string sortOrder = "ascending", string filter = "")
         {
-            var query = _context.Users.AsQueryable();
+            var query = _context.Users
+                .Include(u => u.Roles)
+                .AsQueryable();
 
-            // Примените фильтрацию, сортировку и пагинацию на основе входных параметров.
             if (!string.IsNullOrEmpty(filter))
             {
                 query = query.Where(u => u.Name!.Contains(filter) || u.Email!.Contains(filter));
             }
 
-            // Сортировка.
             query = sortOrder.ToLower() == "ascending"
                 ? query.OrderBy(user => EF.Property<object>(user, sortField))
                 : query.OrderByDescending(user => EF.Property<object>(user, sortField));
 
-            // Пагинация.
-            var users = query.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            var users = await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
 
             return Ok(users);
         }
 
-        // Поиск пользователя по ID
         [HttpGet("{id}")]
-        public IActionResult GetUser(int id)
+        public async Task<IActionResult> GetUser(int id)
         {
-            var user = _context.Users.Include(u => u.Roles).FirstOrDefault(u => u.Id == id);
+            var user = await _context.Users.Include(u => u.Roles).FirstOrDefaultAsync(u => u.Id == id);
             if (user == null)
             {
                 return NotFound();
@@ -52,11 +51,9 @@ namespace VebtechTestApplication.Controllers
             return Ok(user);
         }
 
-        // Создание нового пользователя
         [HttpPost]
-        public IActionResult CreateUser([FromForm] string name, [FromForm] int age, [FromForm] string email)
+        public async Task<IActionResult> CreateUser([FromForm] string name, [FromForm] int age, [FromForm] string email)
         {
-            // Создание нового пользователя без явного указания Id
             var user = new User
             {
                 Name = name,
@@ -70,23 +67,20 @@ namespace VebtechTestApplication.Controllers
             }
 
             _context.Users.Add(user);
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
 
             return CreatedAtAction(nameof(GetUser), new { id = user.Id }, user);
         }
 
-        // Обновление данных существуещего пользователя по ID
         [HttpPut("{id}")]
-        public IActionResult UpdateUser(int id, [FromForm] string name, [FromForm] int age, [FromForm] string email)
+        public async Task<IActionResult> UpdateUser(int id, [FromForm] string name, [FromForm] int age, [FromForm] string email)
         {
-            // Получите существующего пользователя по Id
-            var user = _context.Users.FirstOrDefault(u => u.Id == id);
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
             if (user == null)
             {
                 return NotFound("Пользователь не найден");
             }
 
-            // Обновление свойств пользователя на основе параметров запроса
             user.Name = name;
             user.Age = age;
             user.Email = email;
@@ -101,87 +95,77 @@ namespace VebtechTestApplication.Controllers
                 return BadRequest("Возраст должен быть положительным числом");
             }
 
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
 
             return NoContent();
         }
 
-        // Удаление данных существуещего пользователя по ID
         [HttpDelete("{id}")]
-        public IActionResult DeleteUser(int id)
+        public async Task<IActionResult> DeleteUser(int id)
         {
-            var roles = _context.Users.Include(u => u.Roles).FirstOrDefault(u => u.Id == id);
-
-            if (roles == null)
+            var user = await _context.Users.Include(u => u.Roles).FirstOrDefaultAsync(u => u.Id == id);
+            if (user == null)
             {
                 return NotFound("Пользователь не найден");
             }
 
-
-            // Удалите записи ролей.
-            foreach (var role in roles!.Roles!.ToList())
+            foreach (var role in user.Roles!.ToList())
             {
                 _context.Roles.Remove(role);
             }
 
-            var user = _context.Users.FirstOrDefault(u => u.Id == id);
-            if (user == null)
-            {
-                return NotFound();
-            }
-
             _context.Users.Remove(user);
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
 
             return NoContent();
         }
 
-        // Присвоение роли существуещему пользователю
         [HttpPost("{userId}/roles/{roleId}")]
-        public IActionResult AddRoleToUser(int userId, int roleId)
+        public async Task<IActionResult> AddRoleToUser(int userId, int roleId, string email)
         {
-            var user = _context.Users.Include(u => u.Roles).FirstOrDefault(u => u.Id == userId);
+            var user = await _context.Users.Include(u => u.Roles).FirstOrDefaultAsync(u => u.Id == userId);
             if (user == null)
             {
                 return NotFound("Пользователь не найден");
             }
 
-            var role = _context.Roles.FirstOrDefault(r => r.RoleId == roleId);
+            if (_context.Users.Any(u => u.Email == email))
+            {
+                return BadRequest("Пользователь с таким email уже существует");
+            }
+
+            var role = await _context.Roles.FirstOrDefaultAsync(r => r.RoleId == roleId);
             if (role == null)
             {
                 return NotFound("Роль не найдена");
             }
 
-            // Проверьте, не имеет ли пользователь уже эту роль.
             if (user.Roles!.Any(r => r.RoleId == roleId))
             {
                 return BadRequest("Пользователь уже имеет эту роль");
             }
 
             user.Roles!.Add(role);
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
 
             return Ok("Роль успешно присвоена пользователю");
         }
 
-
-        // Удаление роли существуещему пользователю
         [HttpDelete("{userId}/roles/{roleId}")]
-        public IActionResult RemoveRoleFromUser(int userId, int roleId)
+        public async Task<IActionResult> RemoveRoleFromUser(int userId, int roleId)
         {
-            var user = _context.Users.Include(u => u.Roles).FirstOrDefault(u => u.Id == userId);
+            var user = await _context.Users.Include(u => u.Roles).FirstOrDefaultAsync(u => u.Id == userId);
             if (user == null)
             {
                 return NotFound("Пользователь не найден");
             }
 
-            var role = _context.Roles.FirstOrDefault(r => r.RoleId == roleId);
+            var role = await _context.Roles.FirstOrDefaultAsync(r => r.RoleId == roleId);
             if (role == null)
             {
                 return NotFound("Роль не найдена");
             }
 
-            // Проверьте, имеет ли пользователь эту роль, прежде чем ее удалить.
             var userRole = user.Roles!.FirstOrDefault(r => r.RoleId == roleId);
             if (userRole == null)
             {
@@ -189,10 +173,9 @@ namespace VebtechTestApplication.Controllers
             }
 
             user.Roles!.Remove(userRole);
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
 
             return Ok("Роль успешно удалена у пользователя");
         }
-
     }
 }
